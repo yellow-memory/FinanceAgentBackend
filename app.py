@@ -2,15 +2,8 @@ import os
 from dotenv import load_dotenv
 import openai
 import pandas as pd
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-from io import BytesIO, StringIO
-import base64
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
-import seaborn as sns
-import io
 
 load_dotenv()
 openai.api_key = os.getenv('OPENAI_API_KEY')
