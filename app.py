@@ -2,8 +2,9 @@ import os
 from dotenv import load_dotenv
 import openai
 import pandas as pd
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+import io
 
 load_dotenv()
 openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -12,13 +13,12 @@ app = Flask(__name__)
 CORS(app)
 
 def clean_code(code: str) -> str:
-    # Remove ```python and ``` from the start and end of the response
     code = code.replace('```python', '').replace('```', '').strip()
     return code
 
-def call_openai(prompt):# Add your OpenAI API key here
+def call_openai(prompt):
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",  # Chat model
+        model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You are a helpful assistant for providing insights."},
             {"role": "user", "content": prompt}
@@ -44,13 +44,66 @@ def merge_excel():
     df2 = pd.read_excel(file2)
 
     prompt = (
-        f"I have two Excel files containing the following data:\n\nFile 1:\n\n{df1}\n\nFile 2:\n\n{df2}\n\nPlease merge these datasets side by side, aligning the rows horizontally, and filling missing values with NaN. Return only the merged result in a structured format without any code or explanation."
+        f"I have two Excel files and these are data samples - 10 header rows of each excel file:\n\n"
+        f"File 1 (first 10 rows):\n{df1.head(10).to_dict(orient='records')}\n\n"
+        f"File 2 (first 10 rows):\n{df2.head(10).to_dict(orient='records')}\n\n"
+        f"Suppose that you have these type of data - each one has nearly 10,000 or 20,000 rows (maximum)"
+        f"Please provide Python code to merge these datasets based on their common structure."
+        f"What the most important is the given dataframes are only the sample data, not the entire data."
+        f"So you have to provide the python function named merge_dataframes and it has two input parameters - dataframes of each excel file, then return the merging result named merged_df."
+        f"provide only the code without any explanation."
     )
 
     openai_response = call_openai(prompt)
-    print(openai_response)
+    print("AI Generated Code\n", openai_response)
+    script = clean_code(openai_response)
+    local_scope = {}
+    exec(script, globals(), local_scope)
 
-    return jsonify({"merge_result": openai_response})
+    try:
+        result = local_scope['merge_dataframes'](df1, df2)
+        print("this is the merge result.\n", result.head(20))
+    except Exception as e:
+        return jsonify({"error": f"Error running the code: {str(e)}"}), 500
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        result.to_excel(writer, index=False, sheet_name='Merged Data')
+    output.seek(0)
+
+    return send_file(
+        output,
+        download_name='merged_data.xlsx',
+        as_attachment=True,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+@app.route('/chat-gpt', methods=['POST'])
+def chat_gpt():
+    data = request.get_json()
+
+    if not data or 'message' not in data or 'chatHistory' not in data:
+        return jsonify({'error': 'Invalid request payload'}), 400
+    
+    chat_history = data['chatHistory']
+
+    messages = [{'role': 'system', 'content': 'You are a helpful assistant for providing insight.'}]
+
+    for chat in chat_history:
+        role = 'user' if chat['sender'] == 'user' else 'assistant'
+        messages.append({'role': role, 'content': chat['text']})
+
+    try:
+        response = openai.ChatCompletion.create(
+            model = "gpt-3.5-turbo",
+            messages = messages,
+            temperature = 0.3
+        )
+        reply = response['choices'][0]['message']['content'].strip()
+        return jsonify({'reply': reply})
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/cohort-analysis', methods=['POST'])
 def cohort_analysis():
@@ -211,3 +264,6 @@ def identify_outliers():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+
+# if __name__ == "__main__":
+#     app.run(debug=False)
